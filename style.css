@@ -1,0 +1,43 @@
+body {
+    margin: 0;
+    background: #000;
+    overflow: hidden;
+}
+
+#canvas-container {
+    display: block;
+    width: 100vw;
+    height: 100vh;
+}
+
+.text-overlay {
+  position: fixed;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  text-align: center;
+  color: white;
+  text-shadow: 0 0 10px rgba(255, 255, 255, 0.7);
+  z-index: 1000;
+  pointer-events: none;
+}
+
+.text-overlay.visible {
+  opacity: 1;
+}
+
+.text-overlay h1, .text-overlay .zorko {
+  transform: translateY(20px);
+  opacity: 0;
+  transition: transform 0.8s ease-out, opacity 0.8s ease-out;
+}
+
+.text-overlay.visible h1, .text-overlay.visible .zorko {
+  transform: translateY(0);
+  opacity: 1;
+}
+
+/* Задержка для параграфа */
+.text-overlay.visible .zorko {
+  transition-delay: 0.3s;
+}
