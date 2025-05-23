@@ -1,12 +1,18 @@
 // Инициализация сцены
 const canvas = document.getElementById('canvas-container');
 const scene = new THREE.Scene();
-const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
+const camera = new THREE.PerspectiveCamera(90, window.innerWidth / window.innerHeight, 0.1, 10000);
+camera.layers.enable(1); // Включаем слой для частиц
+camera.updateProjectionMatrix(); // Обязательно обновляйте матрицу после изменений
+
 const renderer = new THREE.WebGLRenderer({
     canvas,
     antialias: true,
     alpha: true
 });
+
+renderer.setPixelRatio(window.devicePixelRatio);
+renderer.autoClear = false;
 renderer.setSize(window.innerWidth, window.innerHeight);
 renderer.toneMapping = THREE.ReinhardToneMapping;
 renderer.toneMappingExposure = 1.5;
@@ -23,6 +29,9 @@ const EMISSION_COLOR = new THREE.Color(0xf4f4f4);
 let emissionPeakReached = false;
 const PARTICLE_BURST_COUNT = 300;
 let burstParticles = null;
+// Добавляем в раздел с переменными
+let particlesActivated = false; // Флаг активации частиц
+const PARTICLES_MIN_OPACITY = 0.3; // Минимальная прозрачность частиц
 
 // Настройка Bloom эффекта
 const bloomParams = {
@@ -54,11 +63,12 @@ light.position.set(1, 1, 1);
 scene.add(light);
 scene.add(new THREE.AmbientLight(0x404040));
 
+
 // Переменные для анимации
 let pulseTime = 0;
 const PARTICLE_COUNT = 150;
 const REACT_DISTANCE = 300;
-let model, particles;
+let model;
 let fragments = [];
 const mouse = new THREE.Vector2();
 const raycaster = new THREE.Raycaster();
@@ -72,6 +82,44 @@ const rotationSpeed = 0.02;
 const maxRotation = Math.PI / 4;
 const fragmentScale = 1.02;
 let isCursorNear = false;
+const EXPLODE_THRESHOLD = 1.2; // Дистанция камеры для активации взрыва
+const MAX_EXPLODE_DISTANCE = 0.5; // Максимальная сила взрыва
+const MOUSE_EXPLODE_FACTOR = 0.3; // Максимальная сила вибрации от мыши
+
+
+// Обновите функцию handleScroll:
+function handleScroll() {
+    scrollProgress = Math.min(window.scrollY / SCROLL.scrollRange, 1);
+    console.log(`Scroll progress: ${scrollProgress.toFixed(3)}`);
+}
+
+// Обновленные настройки частиц
+const PARTICLE_SETTINGS = {
+  count: 200,            // Общее количество частиц
+  size: 2.4,           // Размер частиц
+  speed: 0.003,         // Скорость движения
+  spawnArea: 0.1        // Область появления вокруг модели (0-1)
+};
+
+// Переменные для управления частицами
+let particles = null;
+let particleSystemInitialized = false;
+let targetCameraDistance = 2.0; // Начальная дистанция камеры
+let currentCameraDistance = 2.0;
+
+// Добавляем в раздел с переменными
+let scrollY = 0;
+const SCROLL = {
+  minDistance: -2,    // Ближайшее расстояние (при полном скролле вниз)
+  maxDistance: 3.0,    // Начальное расстояние (без скролла)
+  scrollRange: 2000    // Диапазон скролла в пикселях для полного эффекта
+};
+let scrollProgress = 0;
+
+// Добавляем в самом начале (после объявления переменных)
+window.addEventListener('scroll', handleScroll);
+handleScroll(); // Инициализация начального значения
+
 
 // Функция для отладки
 function debugInfo() {
@@ -145,9 +193,9 @@ function updateEmission() {
 function createParticleBurst() {
     if (!model) return;
 
-    const box = new THREE.Box3().setFromObject(model);
-    const center = box.getCenter(new THREE.Vector3());
-    const size = box.getSize(new THREE.Vector3()).length();
+    const burstBox = new THREE.Box3().setFromObject(model);
+    const burstCenter = burstBox.getCenter(new THREE.Vector3());
+    const burstSize = burstBox.getSize(new THREE.Vector3()).length();
     
     const geometry = new THREE.BufferGeometry();
     const positions = new Float32Array(PARTICLE_BURST_COUNT * 3);
@@ -155,13 +203,13 @@ function createParticleBurst() {
     const sizes = new Float32Array(PARTICLE_BURST_COUNT);
 
     for (let i = 0; i < PARTICLE_BURST_COUNT; i++) {
-        const r = size * 0.5 * Math.random();
+        const r = burstSize * 0.5 * Math.random();
         const theta = Math.random() * Math.PI * 2;
         const phi = Math.acos(2 * Math.random() - 1);
         
-        positions[i * 3] = center.x + r * Math.sin(phi) * Math.cos(theta);
-        positions[i * 3 + 1] = center.y + r * Math.sin(phi) * Math.sin(theta);
-        positions[i * 3 + 2] = center.z + r * Math.cos(phi);
+        positions[i * 3] = burstCenter.x + r * Math.sin(phi) * Math.cos(theta);
+        positions[i * 3 + 1] = burstCenter.y + r * Math.sin(phi) * Math.sin(theta);
+        positions[i * 3 + 2] = burstCenter.z + r * Math.cos(phi);
         
         // Белый цвет для burst частиц
         colors[i * 3] = 1.0;
@@ -169,7 +217,7 @@ function createParticleBurst() {
         colors[i * 3 + 2] = 1.0;
         
         // Такой же размер как у обычных частиц
-        sizes[i] = size * 0.01;
+        sizes[i] = burstSize * 0.01;
     }
 
     geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
@@ -177,12 +225,12 @@ function createParticleBurst() {
     geometry.setAttribute('size', new THREE.BufferAttribute(sizes, 1));
 
     const material = new THREE.PointsMaterial({
-        size: size * 0.01, // Такой же размер как у обычных частиц
+        size: burstSize * 0.01, // Такой же размер как у обычных частиц
         vertexColors: true,
         transparent: true,
         opacity: 1,
         blending: THREE.AdditiveBlending,
-        sizeAttenuation: true
+        sizeAttenuation: false
     });
 
     burstParticles = new THREE.Points(geometry, material);
@@ -248,12 +296,38 @@ function updateBurstParticles() {
     }
 }
 
+// Функция для обновления позиции камеры
+function updateCameraPosition() {
+    if (!model) return;
+    
+    const targetDistance = THREE.MathUtils.lerp(
+        SCROLL.maxDistance,
+        SCROLL.minDistance,
+        scrollProgress
+    );
+    
+    camera.position.z += (targetDistance - camera.position.z) * 0.01;
+
+    
+    // Для отладки
+    console.log(`Target distance: ${targetDistance.toFixed(2)}, Current: ${camera.position.z.toFixed(2)}`);
+}
+
+
 // Загрузка модели с улучшенной обработкой ошибок
 const loader = new THREE.GLTFLoader();
 loader.load('model.glb', (gltf) => {
     try {
         model = gltf.scene;
-
+        
+        // Центрирование модели
+        const initBox = new THREE.Box3().setFromObject(model);
+        const initCenter = initBox.getCenter(new THREE.Vector3());
+        model.position.sub(initCenter);
+        
+        // Начальная позиция камеры
+        const initSize = initBox.getSize(new THREE.Vector3()).length();
+        camera.position.z = initSize * SCROLL.maxDistance;
         model.traverse((child) => {
             if (child.isMesh) {
                 child.userData.originalColor = child.material.color.clone();
@@ -284,10 +358,13 @@ loader.load('model.glb', (gltf) => {
         const box = new THREE.Box3().setFromObject(model);
         const center = box.getCenter(new THREE.Vector3());
         model.position.sub(center);
-        camera.position.z = box.getSize(new THREE.Vector3()).length() * 1.5;
+        const modelSize = box.getSize(new THREE.Vector3()).length();
+        targetCameraDistance = modelSize * SCROLL.maxDistance; // Используем maxDistance как базовое значение
+        camera.position.z = targetCameraDistance;
+
 
         // Создание частиц
-        createParticles(center, box.getSize(new THREE.Vector3()).length() * 0.2);
+        createParticles(center, box.getSize(new THREE.Vector3()).length() * 0.15);
         animate();
         console.log('Model loaded successfully');
     } catch (e) {
@@ -365,76 +442,94 @@ function updateEmission() {
 // Обновленная функция createParticles (белые частицы)
 function createParticles(center, radius) {
     const geometry = new THREE.BufferGeometry();
-    const pos = new Float32Array(PARTICLE_COUNT * 3); // Исправлено: было *1, нужно *3
+    const pos = new Float32Array(PARTICLE_COUNT * 3); // Каждая частица имеет три координаты XYZ
     const colors = new Float32Array(PARTICLE_COUNT * 3);
     const sizes = new Float32Array(PARTICLE_COUNT);
 
     for (let i = 0; i < PARTICLE_COUNT; i++) {
-        const r = radius * 0.3 * Math.cbrt(Math.random());
-        const theta = Math.random() * Math.PI * 2;
-        const phi = Math.acos(2 * Math.random() - 1);
+        const r = radius * 0.3 * Math.cbrt(Math.random()); // Радиус сферы
+        const theta = Math.random() * Math.PI * 2; // Угол вокруг оси Z
+        const phi = Math.acos(2 * Math.random() - 1); // Полярный угол сферической системы координат
 
-        pos[i * 3] = center.x + r * Math.sin(phi) * Math.cos(theta);
-        pos[i * 3 + 1] = center.y + r * Math.sin(phi) * Math.sin(theta);
-        pos[i * 3 + 2] = center.z + r * Math.cos(phi);
+        pos[i * 3]     = center.x + r * Math.sin(phi) * Math.cos(theta); // X
+        pos[i * 3 + 1] = center.y + r * Math.sin(phi) * Math.sin(theta); // Y
+        pos[i * 3 + 2] = center.z + r * Math.cos(phi);                   // Z
 
-        // Белый цвет для всех частиц
-        colors[i * 3] = 1.0;
+        // Цвет частиц белый
+        colors[i * 3]   = 1.0;
         colors[i * 3 + 1] = 1.0;
         colors[i * 3 + 2] = 1.0;
 
-        sizes[i] = radius * 0.01;
+        sizes[i] = radius * 0.1; // Начальный размер частиц
     }
 
-    geometry.setAttribute('position', new THREE.BufferAttribute(pos, 3));
-    geometry.setAttribute('color', new THREE.BufferAttribute(colors, 3));
-    geometry.setAttribute('size', new THREE.BufferAttribute(sizes, 1));
+    geometry.setAttribute('position', new THREE.BufferAttribute(pos, 3)); // Позиции частиц
+    geometry.setAttribute('color', new THREE.BufferAttribute(colors, 3)); // Цвета частиц
+    geometry.setAttribute('size', new THREE.BufferAttribute(sizes, 1));   // Размеры частиц
 
-    const material = new THREE.PointsMaterial({
-        size: radius * 0.04, // Уменьшенный размер для всех частиц
-        vertexColors: true,
-        transparent: true,
-        opacity: 0,
-        blending: THREE.AdditiveBlending,
-        sizeAttenuation: true
+    const material = new THREE.PointsMaterial({ // Материал для отображения частиц
+        size: radius * 0.03,                     // Фиксированный размер каждой частицы
+        vertexColors: true,                      // Используем заданные цвета
+        transparent: true,                       // Частицы полупрозрачные
+        opacity: 0.8,                            // Непрозрачность около 80%
+        blending: THREE.AdditiveBlending,        // Эффект свечения при наложении цветов
+        sizeAttenuation: true, // Важно отключить attenuation
+        depthWrite: false // Добавляем эту строку
     });
 
-    particles = new THREE.Points(geometry, material);
-    particles.layers.enable(1);
-    particles.visible = false;
-    scene.add(particles);
+    particles = new THREE.Points(geometry, material); // Создаем набор частиц
+    particles.layers.enable(1);                      // Включаем слой 1
+    particles.frustumCulled = false; // Отключаем отсечение по фрустуму
+    particles.renderOrder = 1; // Устанавливаем высокий порядок рендеринга
 
-    // Анимация частиц
+    //particles.visible = false;                       // Скрываем пока частицы
+    //particles.material.opacity = 0;                  // Полностью прозрачный начальный материал
+    scene.add(particles);                            // Добавляем частицы в сцену
+
+    // Данные для управления движением частиц
     particles.userData = {
-        velocities: Array(PARTICLE_COUNT).fill().map(() => ({
+        velocities: Array(PARTICLE_COUNT).fill().map(() => ({ // Скорость каждой частицы
             x: (Math.random() - 0.5) * 0.002,
             y: (Math.random() - 0.5) * 0.002,
             z: (Math.random() - 0.5) * 0.002,
-            offset: Math.random() * Math.PI * 2
+            offset: Math.random() * Math.PI * 2 // Смещение фазы колебаний
         }))
     };
 }
 
-// Обновление частиц
 function updateParticles() {
-    if (!particles?.visible) return;
+    if (!particles || !particlesActivated) return;
 
     const pos = particles.geometry.attributes.position.array;
     const time = Date.now() * 0.001;
+    const modelScale = model.scale.length();
 
     for (let i = 0; i < PARTICLE_COUNT; i++) {
         const v = particles.userData.velocities[i];
         const o = i * 3;
-        pos[o] += v.x + Math.sin(time * 0.5 + v.offset) * 0.0005;
-        pos[o + 1] += v.y + Math.cos(time * 0.6 + v.offset) * 0.0005;
-        pos[o + 2] += v.z + Math.sin(time * 0.4 + v.offset) * 0.0005;
+        
+        // Масштабируем движение частиц относительно размера модели
+        pos[o] += (v.x + Math.sin(time * 0.5 + v.offset) * 0.0005 * modelScale);
+        pos[o + 1] += (v.y + Math.cos(time * 0.6 + v.offset) * 0.0005 * modelScale);
+        pos[o + 2] += (v.z + Math.sin(time * 0.4 + v.offset) * 0.0005 * modelScale);
     }
 
     particles.geometry.attributes.position.needsUpdate = true;
+    
+    // Автоматическая коррекция прозрачности
+    if (camera.position.z < EXPLODE_THRESHOLD) {
+        const fadeFactor = THREE.MathUtils.clamp(
+            camera.position.z / EXPLODE_THRESHOLD,
+            0.3, 1
+        );
+        particles.material.opacity = 0.8 * fadeFactor;
+    }
 }
 
 // Обработка движения мыши
 document.addEventListener('mousemove', (event) => {
+    if (!model || !particles) return;
+
     const rect = canvas.getBoundingClientRect();
     const cursorX = event.clientX - rect.left;
     const cursorY = event.clientY - rect.top;
@@ -449,6 +544,16 @@ document.addEventListener('mousemove', (event) => {
     isCursorNear = distance < REACT_DISTANCE;
 
     if (isCursorNear) {
+        // Активируем частицы только один раз при первом наведении
+        if (!particlesActivated) {
+            particlesActivated = true;
+            particles.visible = true;
+            gsap.to(particles.material, {
+                opacity: 0.8,
+                duration: 0.5,
+                ease: "power2.out"
+            });
+        }
         mouse.x = (cursorX / rect.width) * 2 - 1;
         mouse.y = - (cursorY / rect.height) * 2 + 1;
 
@@ -459,25 +564,14 @@ document.addEventListener('mousemove', (event) => {
         const intersects = raycaster.intersectObject(model, true);
 
         if (intersects.length > 0) {
-            if (!particles.visible) {
-                particles.visible = true;
-                gsap.to(particles.material, {
-                    opacity: 1,
-                    duration: 1
-                });
-            }
-            explodeFactor = Math.min(explodeFactor + 0.03, 1.0);
+            particles.material.opacity = Math.min(1, particles.material.opacity + 0.05);
+            // Управляем только небольшой вибрацией
+            explodeFactor = Math.min(explodeFactor + 0.03, 0.3); // Максимум 0.3 вместо 1.0
         } else {
+            particles.material.opacity = Math.min(1, particles.material.opacity + 0.05);
             explodeFactor = Math.max(explodeFactor - 0.01, 0);
         }
     } else {
-        if (particles.visible) {
-            gsap.to(particles.material, {
-                opacity: 0,
-                duration: 1.5,
-                onComplete: () => { particles.visible = false; }
-            });
-        }
         explodeFactor = Math.max(explodeFactor - 0.02, 0);
     }
 });
@@ -497,6 +591,7 @@ function updateRotation() {
 function vibrateFragments() {
     if (fragments.length === 0) return;
 
+    // Эффект вибрации при наведении (оригинальный)
     raycaster.setFromCamera(mouse, camera);
     const intersectPoint = raycaster.ray.direction.clone().multiplyScalar(10).add(camera.position);
 
@@ -513,29 +608,42 @@ function vibrateFragments() {
             .normalize();
 
         const randomOffset = new THREE.Vector3(
-            (Math.random() - 0.5) * 0.05,
-            (Math.random() - 0.5) * 0.05,
-            (Math.random() - 0.5) * 0.05
+            (Math.random() - 0.5) * 0.2,
+            (Math.random() - 0.5) * 0.2,
+            (Math.random() - 0.5) * 0.2
         );
 
+        // Только эффект от курсора (без взрыва)
         const targetPosition = new THREE.Vector3()
             .copy(originalPos)
             .add(direction.multiplyScalar(explodeFactor * maxExplodeDistance * scaledStrength))
             .add(randomOffset.multiplyScalar(explodeFactor));
 
-        gsap.to(fragment.position, {
-            x: targetPosition.x,
-            y: targetPosition.y,
-            z: targetPosition.z,
-            duration: 0.3,
-            ease: "power2.out"
-        });
+        fragment.position.lerp(targetPosition, 0.3);
 
         if (explodeFactor > 0.1) {
             fragment.rotation.x = originalRotations[i].x + (Math.random() - 0.5) * explodeFactor * 0.1;
             fragment.rotation.y = originalRotations[i].y + (Math.random() - 0.5) * explodeFactor * 0.1;
         }
     });
+
+    // Отдельно добавляем эффект взрыва при близости камеры
+    if (camera.position.z < EXPLODE_THRESHOLD) {
+        const explosionStrength = THREE.MathUtils.clamp(
+            (EXPLODE_THRESHOLD - camera.position.z) / EXPLODE_THRESHOLD, 
+            0, 
+            1
+        ) * MAX_EXPLODE_DISTANCE;
+
+        fragments.forEach((fragment, i) => {
+            const originalWorldPos = originalPositions[i].worldPosition;
+            const explosionDirection = new THREE.Vector3()
+                .subVectors(originalWorldPos, model.position)
+                .normalize();
+
+            fragment.position.add(explosionDirection.multiplyScalar(explosionStrength * 0.3));
+        });
+    }
 }
 
 // Анимация
@@ -543,12 +651,24 @@ function vibrateFragments() {
 function animate() {
     requestAnimationFrame(animate);
 
+    if (!model) return; // Не анимируем, если модель не загружена
+        // Очистка только глубины
+    renderer.clearDepth();
+    renderer.clearColor()
+
+    // Рендерим частицы после основной сцены
+    renderer.render(scene, camera);
+    updateCameraPosition();
+    // Всегда обновляем частицы после активации
+    if (particlesActivated) {
+        updateParticles();
+    }
+
     try {
         updateRotation();
         vibrateFragments();
         if (particles) updateParticles();
         //updateEmission();
-        
         bloomComposer.render();
         
         // Периодическая отладка (раз в 2 секунды)
@@ -564,6 +684,8 @@ function animate() {
         console.error('Animation error:', e);
     }
 }
+
+
 
 // Ресайз
 window.addEventListener('resize', () => {

@@ -1,13 +1,33 @@
 body {
-    margin: 0;
-    background: #000;
-    overflow: hidden;
+  margin: 0;
+  background-color: #ffffff;
+  /* Разрешаем скролл для всего body */
+  overflow-x: hidden;
 }
 
 #canvas-container {
-    display: block;
-    width: 100vw;
-    height: 100vh;
+  /* Фиксируем канвас на всю страницу */
+  position: fixed;
+  background-color: #ffffff;
+  mix-blend-mode: normal;
+  top: 0;
+  left: 0;
+  width: 100vw;
+  height: 100vh;
+  z-index: 10;
+  pointer-events: none; /* Чтобы можно было скроллить под канвасом */
+}
+#canvas-container canvas {
+  display: block;
+  background-color: #ffffff;
+}
+
+.content-scroll {
+  /* Отступ сверху = высота viewport + 2000px скролла */
+  margin-top: calc(100vh + 2000px);
+  position: relative;
+  z-index: 5;
+  /* Остальные стили для контента */
 }
 
 .text-overlay {
